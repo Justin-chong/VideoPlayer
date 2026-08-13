@@ -1,66 +1,81 @@
-# Qt Creator
+# ============================================
+# Qt Creator 用户配置（每个开发者不同，不上传）
+# ============================================
 .qtcreator/
 .qtc_clangd/
+CMakeLists.txt.user
+*.user
 
-# 构建目录
+# ============================================
+# Visual Studio 临时文件
+# ============================================
+.vs/
+.vscode/
+*.suo
+*.sdf
+*.opensdf
+x64/
+ipch/
+
+# ============================================
+# 构建目录（绝对不能上传）
+# ============================================
 build/
 build*/
-build7/
+build*/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
 
-# VS 临时文件
-.vs/
-*.user
-*.suo
-x64/
+# CMake 构建产物
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
 
+# 编译临时文件
+*.obj
+*.ilk
+*.pdb
+*.exp
+*.lib
+*.tlog
+*.recipe
+*.lastbuildstate
+*.log
 
-#tmp folders
-src/.vs
+# ============================================
+# FFmpeg 7.x 库（运行时 DLL 太大，单独下载）
+# 保留 include/ 头文件用于编译
+# ============================================
+src/ffmpeg/bin/
+src/ffmpeg/lib/
+# src/ffmpeg/include/  # 头文件保留，需要用于编译
+
+# ============================================
+# Qt 翻译文件（可选）
+# ============================================
+# src/VideoPlayer_en_001.qm
+# src/VideoPlayer_en_001.ts
+
+# ============================================
+# 调试/临时文件
+# ============================================
 src/debug/
 src/release/
-src/ffmpeg/doc/
+src/.vs/
 *.bak
-build/
-ui_*.h
+*.tmp
+*.swp
+*.swo
+*~
 
-#tem files
-*.log
-.recipe
-.ilk
-.pdb
+# 旧构建目录（Qt Creator 自动生成的，已废弃）
+# build/Desktop_Qt_6_10_3_MSVC2022_64bit-Debug/
 
-
-# Prerequisites
-*.d
-
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
-
-# Precompiled Headers
-*.gch
-*.pch
-
-# Compiled Dynamic libraries
-*.so
-*.dylib
-# *.dll
-
-
-# Fortran module files
-*.mod
-*.smod
-
-
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-#*.lib
-
-# Executables
-# *.exe
-*.out
-*.app
+# 测试日志
+test_*.log
+test_*.log.err
