@@ -144,6 +144,10 @@ void AudioPlayThread::set_device_volume(float volume)
 
 void AudioPlayThread::stop_device()
 {
+    // ★ 防止二次调用：析构函数 + *_stopped 槽 + 任何其他路径都可能走到这里
+    //   QAudioSink::stop() 二次调用会触发 Qt 内部 abort
+    if (m_bDeviceStopped.exchange(true))
+        return;
     if (m_pOutput)
     {
         m_pOutput->stop();

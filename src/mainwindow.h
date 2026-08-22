@@ -115,6 +115,7 @@ public slots:
     void play_started(bool ret = true);         // 开始播放成功/失败
     void play_failed(const QString& file);      // 播放失败
     void playlist_file_saved(const QString& file);  // 播放列表已保存
+    void on_playback_finished();               // ★ 视频自然播放完毕（video_play_thread 发出）
     void set_threads();                         // 线程集合设置（用于停止时统一退出）
 
 signals:

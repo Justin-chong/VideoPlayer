@@ -101,4 +101,6 @@ private:
     Audio_Resample m_audioResample;         // 重采样上下文
     bool m_bExitThread{false};              // 退出标志
     bool m_bSendToVisual{false};            // 是否发送数据给可视化窗口
+    // ★ 防止 stop_device / 析构函数二次调用 m_pOutput->stop() 导致 QAudioSink 状态崩溃
+    std::atomic<bool> m_bDeviceStopped{false};
 };

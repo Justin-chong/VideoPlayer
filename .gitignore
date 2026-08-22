@@ -76,6 +76,9 @@ src/.vs/
 # 旧构建目录（Qt Creator 自动生成的，已废弃）
 # build/Desktop_Qt_6_10_3_MSVC2022_64bit-Debug/
 
+# 外部工具（不必上传，README 里说明即可）
+src/tools/youtube-dl.exe
+
 # 测试日志
 test_*.log
 test_*.log.err

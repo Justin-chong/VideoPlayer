@@ -58,6 +58,7 @@ public slots:
 signals:
     void frame_ready(const QImage&);         // 一帧图像准备好，发送给主窗口显示
     void subtitle_ready(const QString&);     // 一段字幕准备好，发送给主窗口显示
+    void playback_finished();                // ★ 视频自然播放完毕（读到 EOF），通知主线程自动停止
 
 protected:
     void run() override;  // Qt 线程入口

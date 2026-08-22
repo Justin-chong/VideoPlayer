@@ -1,4 +1,4 @@
-﻿// ***********************************************************/
+// ***********************************************************/
 // video_play_thread.cpp
 //
 //      Copy Right @ lichong. All rights reserved.
@@ -88,6 +88,15 @@ void VideoPlayThread::video_refresh(VideoState* is, double* remaining_time)
         {
             // nothing to do, no picture to display in the queue
             // ★ 没帧时把 remaining_time 设成 REFRESH_RATE，让外层 sleep 10ms 再来
+            // ★ 关键修复：队列空 + 已到文件尾 → 通知主线程自动停止
+            //   否则 video_play_thread 会永远空转，主线程 stop 时会 use-after-free
+            if (is->eof)
+            {
+                // ★ 通知主线程"播放完了"，主线程会调 stop_play 安全释放
+                emit playback_finished();
+                m_bExitThread = true;  // 让 run() 退出循环
+                return;                // 立即退出 video_refresh
+            }
             *remaining_time = REFRESH_RATE;
         }
         else

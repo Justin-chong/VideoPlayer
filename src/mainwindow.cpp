@@ -1,4 +1,4 @@
-﻿// ***********************************************************/
+// ***********************************************************/
 // mainwindow.cpp
 //
 //      Copy Right @ lichong. All rights reserved.
@@ -2154,28 +2154,53 @@ void MainWindow::stop_play()
 {
     try
     {
-        qInfo("[stop_play] start, video_state=%p, audio_play=%p",
-              m_pVideoState.get(), m_pAudioPlayThread.get());
+        // ★ 防重入：read_packet_stopped 和 on_playback_finished 可能同时触发 stop_play
+        //   如果所有 unique_ptr 都为 null，说明已经 stop 过了，直接 return
+        if (!m_pVideoState && !m_pVideoPlayThread && !m_pAudioPlayThread &&
+            !m_pPacketReadThread && !m_pDecodeVideoThread && !m_pDecodeAudioThread)
+        {
+            qInfo("[stop_play] already stopped, skip");
+            return;
+        }
 
-        // ★ 步骤 1：先发信号让音频线程自己停（比强制 delete 安全）
-        emit stop_audio_play_thread();
+        qInfo("[stop_play] start, video_state=%p, audio_play=%p, video_play=%p",
+              m_pVideoState.get(), m_pAudioPlayThread.get(), m_pVideoPlayThread.get());
 
-        // emit stop_read_packet_thread(); //stop read thread
-        // emit stop_decode_thread();		//stop v/a decode thread
-        // emit stop_audio_play_thread();	//stop audio play thread
-        // emit stop_video_play_thread();	//stop video play thread
+        // ★ 关键修复（2026-08-17 二次修复）：play thread（视频/音频）没有 exec() 事件循环，
+        //   emit signal() 是 QueuedConnection，永远收不到 → 永远不退 → use-after-free → abort()
+        //   正确做法：直接调 stop_thread()（设 m_bExitThread + wait），同步等线程退出
+        //
+        //   ★ 重要：这里只能 stop_thread()，不能 reset()！
+        //     原因：set_threads() 时把 m_pVideoPlayThread.get() 存进了 is->threads.video_play_tid
+        //           如果这里 reset()，unique_ptr 析构 → play thread 对象被 delete
+        //           但 is->threads.video_play_tid 仍然指着已 delete 的对象（野指针）
+        //           后面 delete_video_state() → ~VideoStateData() → stream_close() → threads_exit_wait()
+        //           会执行 is->threads.video_play_tid->wait()  →  use-after-free  →  abort()!
+        //   正确做法：stop_thread() 后保留 unique_ptr，让 stream_close() 通过 is->threads.video_play_tid
+        //           安全 wait（线程已退出，wait 立即返回）。
+        //           等 stream_close() 走完，事件循环处理 queued finished 信号时，
+        //           video_play_stopped()/audio_play_stopped() 槽函数才会安全 reset unique_ptr。
+        if (m_pVideoPlayThread)
+        {
+            qInfo("[stop_play] stopping video play thread...");
+            m_pVideoPlayThread->stop_thread();   // 直接同步等它退出
+            // ★ 故意不 reset：让 stream_close() 安全 wait，槽函数最后再 reset
+            qInfo("[stop_play] video play thread stopped");
+        }
+        if (m_pAudioPlayThread)
+        {
+            qInfo("[stop_play] stopping audio play thread...");
+            m_pAudioPlayThread->stop_thread();   // 直接同步等它退出
+            // ★ 故意不 reset：让 stream_close() 安全 wait，槽函数最后再 reset
+            qInfo("[stop_play] audio play thread stopped");
+        }
 
-        /*
-           * playing thread exited by emit signals,
-           * read thread and decode threads exit
-           * at VideoStateData::stream_close
-         */
-
-        // ★ 步骤 2：释放 VideoStateData（其析构会发 abort 给所有线程）
+        // ★ 步骤：释放 VideoStateData（其析构会发 abort 给 read/decode 线程 + free is）
+        //   此时两个 play thread 都已退出，is 不会被访问
         delete_video_state();
-        // ★ 步骤 3：清空播放控件（恢复未播放状态）
+        // ★ 清空播放控件（恢复未播放状态）
         set_paly_control_wnd(false);
-        // ★ 步骤 4：清空字幕
+        // ★ 清空字幕
         clear_subtitle_str();
 
         qInfo("[stop_play] done");
@@ -2474,6 +2499,9 @@ bool MainWindow::create_video_play_thread() // video play thread
             connect(m_pVideoPlayThread.get(), &VideoPlayThread::finished, this, &MainWindow::video_play_stopped);
             connect(m_pVideoPlayThread.get(), &VideoPlayThread::frame_ready, this, &MainWindow::image_ready);
             connect(m_pVideoPlayThread.get(), &VideoPlayThread::subtitle_ready, this, &MainWindow::subtitle_ready);
+            // ★ 关键修复：视频自然播放完后由 video_play_thread 通知，自动安全停止
+            //   避免老 bug：视频播完后 video_play_thread 永远空转，UI 点 stop 时 use-after-free → abort
+            connect(m_pVideoPlayThread.get(), &VideoPlayThread::playback_finished, this, &MainWindow::on_playback_finished);
             connect(this, &MainWindow::stop_video_play_thread, m_pVideoPlayThread.get(), &VideoPlayThread::stop_thread);
 
             auto pVideo = m_pVideoState->get_contex(AVMEDIA_TYPE_VIDEO);
@@ -2834,12 +2862,11 @@ void MainWindow::update_image(const QImage& img)
  */
 void MainWindow::read_packet_stopped()
 {
-    if (m_pPacketReadThread)
-    {
-        // ★ 清空 unique_ptr 释放内存
-        m_pPacketReadThread.reset();
-        qDebug("************* Read  packets thread stopped.");
-    }
+    // ★ 防重入：stop_play 中可能已 reset 过
+    if (!m_pPacketReadThread)
+        return;
+    m_pPacketReadThread.reset();
+    qDebug("************* Read  packets thread stopped.");
 
     // ★ 读线程退出意味着播放已结束
     stop_play();
@@ -2850,6 +2877,9 @@ void MainWindow::read_packet_stopped()
  */
 void MainWindow::decode_video_stopped()
 {
+    // ★ 防重入
+    if (!m_pDecodeVideoThread)
+        return;
     m_pDecodeVideoThread.reset();
     // ★ 线程变了，菜单可用状态也要刷新
     update_menus();
@@ -2861,6 +2891,8 @@ void MainWindow::decode_video_stopped()
  */
 void MainWindow::decode_audio_stopped()
 {
+    if (!m_pDecodeAudioThread)
+        return;
     m_pDecodeAudioThread.reset();
     update_menus();
     qDebug("************* Audio decode thread stopped.");
@@ -2871,6 +2903,8 @@ void MainWindow::decode_audio_stopped()
  */
 void MainWindow::decode_subtitle_stopped()
 {
+    if (!m_pDecodeSubtitleThread)
+        return;
     m_pDecodeSubtitleThread.reset();
     update_menus();
     qDebug("************* Subtitle decode thread stopped.");
@@ -2881,6 +2915,9 @@ void MainWindow::decode_subtitle_stopped()
  */
 void MainWindow::audio_play_stopped()
 {
+    // ★ 防重入：stop_play 中已 reset
+    if (!m_pAudioPlayThread)
+        return;
     m_pAudioPlayThread.reset();
     qDebug("************* Audio play thread stopped.");
 
@@ -2897,12 +2934,32 @@ void MainWindow::audio_play_stopped()
  */
 void MainWindow::video_play_stopped()
 {
+    // ★ 防重入：stop_play 中已 reset
+    if (!m_pVideoPlayThread)
+        return;
     m_pVideoPlayThread.reset();
     qDebug("************* Video play thread stopped.");
 
     // ★ 恢复默认背景
     set_default_bkground();
     update_menus();
+}
+
+/**
+ * @brief 视频自然播放完毕（read_thread 读到 EOF，video_play_thread 队列空）
+ *
+ * 这是关键修复：之前 video_play_thread 不会在 EOF 时退出，
+ * 永远在 video_refresh 里 10ms 空转，UI 后续点 stop 时会出现
+ * video_play_thread 访问已 free 的 VideoState → abort() 崩溃。
+ *
+ * 现在：video_play_thread 主动 emit playback_finished，主线程
+ * 自动调 stop_play 走正常释放流程。
+ */
+void MainWindow::on_playback_finished()
+{
+    qInfo("[on_playback_finished] video reached EOF, auto-stopping");
+    // ★ 调现有的 stop_play，里面包了 try/catch，保证异常不传播
+    stop_play();
 }
 
 /**
