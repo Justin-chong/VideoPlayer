@@ -1,4 +1,4 @@
-﻿// ***********************************************************/
+// ***********************************************************/
 // play_control_window.cpp
 //
 //      Copy Right @ lichong. All rights reserved.
@@ -637,13 +637,13 @@ void PlayControlWnd::update_btn_play(bool bPause)
 {
     if (bPause)
     {
-        // ★ 当前是暂停状态，按钮文字显示"Play"
-        ui->btn_play->setText("Play");
+        // ★ 当前是暂停状态，按钮文字显示"播放"
+        ui->btn_play->setText("播放");
     }
     else
     {
-        // ★ 当前是播放状态，按钮文字显示"Pause"
-        ui->btn_play->setText("Pause");
+        // ★ 当前是播放状态，按钮文字显示"暂停"
+        ui->btn_play->setText("暂停");
     }
 }
 

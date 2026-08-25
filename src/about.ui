@@ -105,7 +105,7 @@ Video player based on QT and FFmpeg.</string>
        </size>
       </property>
       <property name="text">
-       <string>Copy Right @ lichong</string>
+       <string>版权所有 © lichong</string>
       </property>
       <property name="textFormat">
        <enum>Qt::RichText</enum>
@@ -161,7 +161,7 @@ Video player based on QT and FFmpeg.</string>
          </sizepolicy>
         </property>
         <property name="text">
-         <string>OK</string>
+         <string>确定</string>
         </property>
        </widget>
       </item>

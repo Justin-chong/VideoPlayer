@@ -106,7 +106,7 @@
    </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
-     <string>View</string>
+     <string>视图</string>
     </property>
     <addaction name="actionHide_Play_Ctronl"/>
     <addaction name="actionFullscreen"/>
@@ -124,7 +124,7 @@
    </widget>
    <widget class="QMenu" name="menuStyle">
     <property name="title">
-     <string>Style</string>
+     <string>主题</string>
     </property>
    </widget>
    <widget class="QMenu" name="menuCV">
@@ -156,11 +156,11 @@
    </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
-     <string>Tools</string>
+     <string>工具</string>
     </property>
     <widget class="QMenu" name="menuAudio_visualize">
      <property name="title">
-      <string>Audio visualize</string>
+      <string>音频可视化</string>
      </property>
      <addaction name="actionBar"/>
      <addaction name="actionLine"/>
@@ -184,32 +184,32 @@
   </widget>
   <action name="actionOpen">
    <property name="text">
-    <string>Open</string>
+    <string>打开</string>
    </property>
   </action>
   <action name="actionHelp">
    <property name="text">
-    <string>Help</string>
+    <string>帮助</string>
    </property>
   </action>
   <action name="actionAbout">
    <property name="text">
-    <string>About</string>
+    <string>关于</string>
    </property>
   </action>
   <action name="actionQuit">
    <property name="text">
-    <string>Quit</string>
+    <string>退出</string>
    </property>
   </action>
   <action name="actionTest">
    <property name="text">
-    <string>Test</string>
+    <string>测试</string>
    </property>
   </action>
   <action name="actionStop">
    <property name="text">
-    <string>Stop</string>
+    <string>停止</string>
    </property>
   </action>
   <action name="actionFullscreen">
@@ -217,17 +217,17 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Full screen</string>
+    <string>全屏</string>
    </property>
   </action>
   <action name="actionYoutube">
    <property name="text">
-    <string>Open Youtube</string>
+    <string>打开 YouTube</string>
    </property>
   </action>
   <action name="actionAspect_Ratio">
    <property name="text">
-    <string>Aspect Ratio</string>
+    <string>宽高比</string>
    </property>
   </action>
   <action name="actionHide_Play_Ctronl">
@@ -235,7 +235,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Hide Play Control</string>
+    <string>隐藏播放控制</string>
    </property>
   </action>
   <action name="actionGrayscale">
@@ -243,7 +243,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Grayscale</string>
+    <string>灰度</string>
    </property>
   </action>
   <action name="actionMirro">
@@ -251,7 +251,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Mirro</string>
+    <string>镜像</string>
    </property>
   </action>
   <action name="actionTransform">
@@ -259,7 +259,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Transform</string>
+    <string>变换</string>
    </property>
   </action>
   <action name="actionHardware_decode">
@@ -267,12 +267,12 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Open DXVA2</string>
+    <string>硬件解码 (DXVA2)</string>
    </property>
   </action>
   <action name="actionAbout_QT">
    <property name="text">
-    <string>About Qt</string>
+    <string>关于 Qt</string>
    </property>
   </action>
   <action name="actionLoop_Play">
@@ -280,12 +280,12 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Loop Play</string>
+    <string>循环播放</string>
    </property>
   </action>
   <action name="actionMedia_Info">
    <property name="text">
-    <string>Media Info</string>
+    <string>媒体信息</string>
    </property>
   </action>
   <action name="actionTest_CV">
@@ -293,7 +293,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Test_CV</string>
+    <string>测试</string>
    </property>
   </action>
   <action name="actionRotate">
@@ -301,7 +301,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Rotation</string>
+    <string>旋转</string>
    </property>
   </action>
   <action name="actionRepeat">
@@ -309,7 +309,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Repeat</string>
+    <string>重复</string>
    </property>
   </action>
   <action name="actionEqualizeHist">
@@ -317,7 +317,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Histogram Equalization</string>
+    <string>直方图均衡化</string>
    </property>
   </action>
   <action name="actionThreshold">
@@ -325,7 +325,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Binary Threshold</string>
+    <string>二值化</string>
    </property>
   </action>
   <action name="actionThreshold_Adaptive">
@@ -333,7 +333,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Adaptive Threshold</string>
+    <string>自适应阈值</string>
    </property>
   </action>
   <action name="actionReverse">
@@ -341,7 +341,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Reverse</string>
+    <string>反转</string>
    </property>
   </action>
   <action name="actionColorReduce">
@@ -349,7 +349,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Color Reduce</string>
+    <string>颜色量化</string>
    </property>
   </action>
   <action name="actionGamma">
@@ -357,7 +357,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Gamma</string>
+    <string>伽马</string>
    </property>
   </action>
   <action name="actionContrastBright">
@@ -365,7 +365,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Contrast Bright</string>
+    <string>对比度/亮度</string>
    </property>
   </action>
   <action name="actionCanny">
@@ -373,7 +373,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Canny </string>
+    <string>Canny 边缘检测</string>
    </property>
   </action>
   <action name="actionBlur">
@@ -381,7 +381,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Smooth</string>
+    <string>模糊</string>
    </property>
   </action>
   <action name="actionSobel">
@@ -389,7 +389,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Sobel</string>
+    <string>Sobel 算子</string>
    </property>
   </action>
   <action name="actionLaplacian">
@@ -397,7 +397,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Laplacian</string>
+    <string>Laplacian 算子</string>
    </property>
   </action>
   <action name="actionScharr">
@@ -405,7 +405,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Scharr</string>
+    <string>Scharr 算子</string>
    </property>
   </action>
   <action name="actionPrewitt">
@@ -413,7 +413,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Prewitt</string>
+    <string>Prewitt 算子</string>
    </property>
   </action>
   <action name="actionRemoveCV">
@@ -421,12 +421,12 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Remove Selection</string>
+    <string>取消选择</string>
    </property>
   </action>
   <action name="actionKeyboard_Usage">
    <property name="text">
-    <string>Tips</string>
+    <string>快捷键</string>
    </property>
   </action>
   <action name="actionLine">
@@ -434,7 +434,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Line</string>
+    <string>折线</string>
    </property>
   </action>
   <action name="actionBar">
@@ -445,7 +445,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Bar</string>
+    <string>柱状</string>
    </property>
   </action>
   <action name="actionSampling">
@@ -456,7 +456,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Sampling</string>
+    <string>采样</string>
    </property>
   </action>
   <action name="actionFrequency">
@@ -464,7 +464,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Frequency</string>
+    <string>频谱</string>
    </property>
   </action>
   <action name="actionPlayList">
@@ -472,17 +472,17 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Playlist</string>
+    <string>播放列表</string>
    </property>
   </action>
   <action name="actionOpenNetworkUrl">
    <property name="text">
-    <string>Open Network Url</string>
+    <string>打开网络 URL</string>
    </property>
   </action>
   <action name="actionOriginalSize">
    <property name="text">
-    <string>Original Size</string>
+    <string>原始大小</string>
    </property>
   </action>
   <action name="actionPie">
@@ -490,7 +490,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Pie</string>
+    <string>饼图</string>
    </property>
   </action>
  </widget>

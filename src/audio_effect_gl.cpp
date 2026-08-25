@@ -1,4 +1,4 @@
-﻿// ***********************************************************/
+// ***********************************************************/
 // audio_effect_gl.cpp
 //
 //      Copy Right @ lichong. All rights reserved.
@@ -48,7 +48,7 @@ AudioEffectGL::AudioEffectGL(QWidget* parent) : QOpenGLWidget(parent)
     setMinimumWidth(width);
     setMinimumHeight(height);
 
-    setWindowTitle("Audio visualization");
+    setWindowTitle("音频可视化");
     // ★ 自动用背景色填充，避免 OpenGL 初始化前出现黑屏
     setAutoFillBackground(true);
 

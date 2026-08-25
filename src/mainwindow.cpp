@@ -61,7 +61,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(std::make_uniq
     create_playlist_wnd();
     create_savedPlaylists_menu();
 
-    setWindowTitle(tr("Video Player"));
+    setWindowTitle(tr("视频播放器"));
     // ★ 显示默认背景图（刚启动时画面不是黑的）
     set_default_bkground();
 
@@ -234,7 +234,7 @@ void MainWindow::create_style_menu()
     auto pMenu = ui->menuStyle;
 
     // ★ 第一个分隔符：标识下面的菜单是"系统主题"
-    pMenu->addSeparator()->setText("System styles");
+    pMenu->addSeparator()->setText("系统主题");
 
     // ★ QActionGroup：让多个 action 互斥（只能选一个）
     m_styleActsGroup = std::make_unique<QActionGroup>(this);
@@ -272,7 +272,7 @@ void MainWindow::create_style_menu()
     }
 
     // ★ 第二个分隔符：标识下面的菜单是"自定义主题"
-    pMenu->addSeparator()->setText("Custom styles");
+    pMenu->addSeparator()->setText("自定义主题");
 
     // ★ 遍历 res/QSS/ 下所有自定义 .qss 文件
     for (const auto& path : m_skin.get_custom_styles())
@@ -363,7 +363,7 @@ void MainWindow::create_recentfiles_menu()
 
     // ★ 单独的"清空最近文件"项
     m_recentClear = std::make_unique<QAction>(this);
-    m_recentClear->setText(QApplication::translate("MainWindow", "Clear", nullptr));
+    m_recentClear->setText(QApplication::translate("MainWindow", "清空", nullptr));
     connect(m_recentClear.get(), SIGNAL(triggered()), this, SLOT(clear_recentfiles()));
 
     auto pMenu = ui->menuRecent_Files;
@@ -1115,21 +1115,21 @@ void MainWindow::on_actionKeyboard_Usage_triggered()
     QString str;
     // ★ 用 tab 缩进，让两列对齐
     QString indent = "		";
-    str += "A" + indent + "Video aspect ratio\n";
-    str += "F" + indent + "Fulllscreen/Unfullscreen\n";
-    str += "H" + indent + "Show help\n";
-    str += "L" + indent + "Show playlist\n";
-    str += "M" + indent + "Mute/Unmute\n";
-    str += "O" + indent + "Keep video original size\n";
-    str += "Space" + indent + "Pause/Play\n";
-    str += "Up" + indent + "Volume up\n";
-    str += "Down" + indent + "Volume down\n";
-    str += "Left" + indent + "Play back\n";
-    str += "Right" + indent + "Play forward\n";
-    str += "<" + indent + "Speed down\n";
-    str += ">" + indent + "Speed up\n";
+    str += "A" + indent + "视频宽高比\n";
+    str += "F" + indent + "全屏/退出全屏\n";
+    str += "H" + indent + "显示帮助\n";
+    str += "L" + indent + "显示播放列表\n";
+    str += "M" + indent + "静音/取消静音\n";
+    str += "O" + indent + "保持视频原始大小\n";
+    str += "Space" + indent + "暂停/播放\n";
+    str += "Up" + indent + "音量增加\n";
+    str += "Down" + indent + "音量减小\n";
+    str += "Left" + indent + "快退\n";
+    str += "Right" + indent + "快进\n";
+    str += "<" + indent + "减速\n";
+    str += ">" + indent + "加速\n";
 
-    show_msg_dlg(str, "Keyboard Control");
+    show_msg_dlg(str, "键盘控制");
 }
 
 /**
@@ -3459,7 +3459,7 @@ void MainWindow::create_savedPlaylists_menu()
 
     // ★ "清空"项
     m_PlaylistsClear = std::make_unique<QAction>(this);
-    m_PlaylistsClear->setText(QApplication::translate("MainWindow", "Clear", nullptr));
+    m_PlaylistsClear->setText(QApplication::translate("MainWindow", "清空", nullptr));
     connect(m_PlaylistsClear.get(), SIGNAL(triggered()), this, SLOT(clear_savedPlaylists()));
 
     auto pMenu = ui->menuSavedPlaylist;

@@ -1,4 +1,4 @@
-﻿// ***********************************************************/
+// ***********************************************************/
 // playlist_window.cpp
 //
 //      Copy Right @ lichong. All rights reserved.
@@ -83,11 +83,11 @@ void PlayListWnd::init_list()
     auto pTable = get_table();
 
     QStringList headerLabels;
-    // headerLabels << "#" << "Title" << "Duration" << "Path";
+    // headerLabels << "#" << "标题" << "时长" << "路径";
     // ★ 表头：三列（如果以后需要"序号"列，把第一行注释打开即可）
-    headerLabels << "Title"
-                 << "Duration"
-                 << "Path";
+    headerLabels << "标题"
+                 << "时长"
+                 << "路径";
     // ★ 设置列数
     pTable->setColumnCount(headerLabels.size());
     // ★ 设置表头文字
@@ -669,9 +669,9 @@ void PlayListWnd::create_temp_menu()
     // ★ unique_ptr 自动 delete，避免泄漏
     m_tmpMenu = std::make_unique<QMenu>(this);
     // ★ 3 个菜单项
-    auto del_act = m_tmpMenu->addAction("Delete");
-    auto clear_act = m_tmpMenu->addAction("Clear");
-    auto save_act = m_tmpMenu->addAction("Save");
+    auto del_act = m_tmpMenu->addAction("删除");
+    auto clear_act = m_tmpMenu->addAction("清空");
+    auto save_act = m_tmpMenu->addAction("保存");
 
     // ★ 3 个 connect：菜单项 triggered -> 对应槽
     connect(del_act, &QAction::triggered, this, &PlayListWnd::deleteBtn_clicked);
