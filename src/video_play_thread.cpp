@@ -24,8 +24,17 @@ VideoPlayThread::VideoPlayThread(QObject* parent, VideoState* pState)
 
 VideoPlayThread::~VideoPlayThread()
 {
+    qInfo("[TRACE][~VideoPlayThread] >>> ENTER, this=%p, isRunning=%d", (void*)this, (int)isRunning());
+
+    qInfo("[TRACE][~VideoPlayThread] -- stop_thread() BEGIN");
     stop_thread();
+    qInfo("[TRACE][~VideoPlayThread] -- stop_thread() DONE");
+
+    qInfo("[TRACE][~VideoPlayThread] -- final_resample_param() BEGIN");
     final_resample_param();
+    qInfo("[TRACE][~VideoPlayThread] -- final_resample_param() DONE");
+
+    qInfo("[TRACE][~VideoPlayThread] <<< EXIT");
 }
 
 void VideoPlayThread::run()
@@ -46,7 +55,7 @@ void VideoPlayThread::run()
             break;
 
         // 2. 暂停时不要刷新画面，但也不能忙等
-        if (is->paused)
+        if (is->paused)//暂停线程一个都不会停止
         {
             msleep(10);  // 10ms 后再检查（避免 100% CPU）
             continue;
@@ -107,8 +116,8 @@ void VideoPlayThread::video_refresh(VideoState* is, double* remaining_time)
             /* dequeue the picture */
             // peek_last：上一帧（用于算 duration）
             // peek：当前要显示的帧
-            lastvp = frame_queue_peek_last(&is->pictq);
-            vp = frame_queue_peek(&is->pictq);
+            lastvp = frame_queue_peek_last(&is->pictq);//拿到上一帧
+            vp = frame_queue_peek(&is->pictq);//当前帧
 
             // serial 不匹配说明是 seek 后的旧帧，丢掉重试
             if (vp->serial != is->videoq.serial)
@@ -126,12 +135,13 @@ void VideoPlayThread::video_refresh(VideoState* is, double* remaining_time)
 
             /* compute nominal last_duration */
             // last_duration：上一帧的显示时长（用来推算下一帧该啥时候显示）
-            last_duration = vp_duration(is, lastvp, vp);
-            // delay：根据音视频同步算"这一帧应该延迟多久再显示"
+            last_duration = vp_duration(is, lastvp, vp);//返回vp->pts-lastvp->pts
+            // delay："上一帧显示后，隔多久显示当前帧"—— 它描述的是 lastvp → vp 之间的时间间隔
             delay = compute_target_delay(last_duration, is);
 
             // 当前时间 < frame_timer+delay：还没到显示时间，再睡一会
             // ★ FFMIN 取"同步要求的等待"和"外层默认 10ms"的较小值，避免睡眠过长
+            // 边界怎么兜底
             time = av_gettime_relative() / 1000000.0;
             if (time < is->frame_timer + delay)
             {
@@ -139,7 +149,7 @@ void VideoPlayThread::video_refresh(VideoState* is, double* remaining_time)
                 goto display;
             }
 
-            // 推进 frame_timer
+            // 推进 frame_timer，上一帧显示时刻+上一帧显示时长
             is->frame_timer += delay;
             // 超过阈值则重置（防止长时间累积导致漂移）
             if (delay > 0 && time - is->frame_timer > AV_SYNC_THRESHOLD_MAX)
@@ -154,14 +164,15 @@ void VideoPlayThread::video_refresh(VideoState* is, double* remaining_time)
             // ★ 丢帧判断：
             //   如果当前帧显示完时，下一帧的 PTS 已经过了
             //   说明视频已经"落后"于音频了，要丢掉当前帧追上去
-            if (frame_queue_nb_remaining(&is->pictq) > 1)
+            //只有当队列里至少还剩 2 帧时，才允许丢当前帧去追音频
+            if (frame_queue_nb_remaining(&is->pictq) > 1)// 条件 0：队列里还有下一帧
             {
                 Frame* nextvp = frame_queue_peek_next(&is->pictq);
                 duration = vp_duration(is, vp, nextvp);
-                if (!is->step &&
-                    (framedrop > 0 ||
+                if (!is->step &&        // 条件 1：不在单步模式
+                    (framedrop > 0 ||   // 条件 2：允许丢帧
                      (framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) &&
-                    time > is->frame_timer + duration)
+                    time > is->frame_timer + duration)  // 条件 3：当前帧已显示完
                 {
                     is->frame_drops_late++;
                     frame_queue_next(&is->pictq);  // 丢当前帧
@@ -600,13 +611,23 @@ bool VideoPlayThread::init_resample_param(AVCodecContext* pVideo, bool bHardware
 void VideoPlayThread::final_resample_param()
 {
     Video_Resample* pResample = &m_Resample;
+    qInfo("[TRACE][final_resample_param] >>> ENTER, sws_ctx=%p, buffer_RGB=%p, pFrameRGB=%p",
+          (void*)pResample->sws_ctx, (void*)pResample->buffer_RGB, (void*)pResample->pFrameRGB);
+
     // Free video resample context
+    qInfo("[TRACE][final_resample_param] -- sws_freeContext(%p)", (void*)pResample->sws_ctx);
     sws_freeContext(pResample->sws_ctx);
+    qInfo("[TRACE][final_resample_param] -- sws_freeContext DONE");
 
     // Free the RGB image
+    qInfo("[TRACE][final_resample_param] -- av_free(buffer_RGB=%p)", (void*)pResample->buffer_RGB);
     av_free(pResample->buffer_RGB);
+    qInfo("[TRACE][final_resample_param] -- av_frame_free(&pFrameRGB=%p)", (void*)pResample->pFrameRGB);
     av_frame_free(&pResample->pFrameRGB);
+    qInfo("[TRACE][final_resample_param] -- av_frame_free DONE, pFrameRGB=%p", (void*)pResample->pFrameRGB);
     av_free(pResample->pFrameRGB);
+
+    qInfo("[TRACE][final_resample_param] <<< EXIT");
 }
 
 /**
@@ -614,8 +635,15 @@ void VideoPlayThread::final_resample_param()
  */
 void VideoPlayThread::stop_thread()
 {
+    qInfo("[TRACE][VideoPlayThread::stop_thread] >>> ENTER, this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
     m_bExitThread = true;
+    //阻塞，等待视频播放线程run()跑完
+    //话句话说，在for循环中检查线程退出标志m_bExitThread以及is—>abort_request
     wait();
+    qInfo("[TRACE][VideoPlayThread::stop_thread] wait() returned, isRunning=%d, isFinished=%d",
+          (int)isRunning(), (int)isFinished());
+    qInfo("[TRACE][VideoPlayThread::stop_thread] <<< EXIT");
 }
 
 /**

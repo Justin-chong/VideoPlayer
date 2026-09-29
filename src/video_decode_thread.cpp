@@ -16,6 +16,8 @@ VideoDecodeThread::VideoDecodeThread(QObject* parent, VideoState* pState)
 
 VideoDecodeThread::~VideoDecodeThread()
 {
+    qInfo("[TRACE][~VideoDecodeThread] this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
 }
 
 /**
@@ -129,11 +131,14 @@ void VideoDecodeThread::run()
             // 这步是同步的，会等 GPU 完成解码
             /*
 int av_hwframe_transfer_data(
-    AVFrame *dst,         // 目标：CPU 内存的新帧
-    AVFrame *src,         // 源：GPU 显存里的硬解帧
+    AVFrame *dst,         // 目标：CPU 内存的新帧→ sw_frame
+    AVFrame *src,         // 源：GPU 显存里的硬解帧→ frame
     int flags             // 一般传 0
 );
              */
+//检查源是硬件帧 → 准备 CPU 目标帧 → 调用 DXVA2 的 `GetRenderTargetData`
+//把 GPU 显存的 D3D surface 拷贝到 CPU 系统内存 → 设置元数据（宽高 / NV12 格式），
+//但不复制 PTS/DTS
             ret = av_hwframe_transfer_data(sw_frame, frame, 0);
             if (ret < 0)
             {
@@ -158,6 +163,9 @@ int av_hwframe_transfer_data(
         // pts 没有时给 NAN（后面会跳过同步）
         // ★ time_base 把"时间基单位"换算成秒（乘以 tb 的浮点值）
         pts = (frame->pts == AV_NOPTS_VALUE) ? NAN : frame->pts * av_q2d(tb);
+
+
+
         // 4. ★ 把这一帧推进 pictq
         // queue_picture 内部会：找空槽 → 填 pts/duration/serial → move_ref
         // ★ pkt_serial 用于跨 seek 识别"是否是同一个播放段"，后续同步判等会用到

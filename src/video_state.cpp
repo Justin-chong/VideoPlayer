@@ -33,8 +33,11 @@ VideoStateData::~VideoStateData()
     //   万一 FFmpeg 7.x 内部用延迟释放，可能踩到已 unref 但还没真正释放的 ctx
     //   修法：先关流（stream_close 走完后所有 avctx 都被 free，device_ctx 引用减到 1）
     //         再 unref 自己这份，device_ctx 引用归 0，真正释放
+    qInfo("[TRACE][~VideoStateData] >>> ENTER, this=%p, m_pState=%p", (void*)this, (void*)m_pState);
     delete_video_state();   // 1) 先关流：内部 stream_close 会 unref avctx 上的 device_ctx/frames_ctx
+    qInfo("[TRACE][~VideoStateData] -- delete_video_state() DONE");
     close_hardware();       // 2) 再 unref 自己持有的 m_hw_device_ctx
+    qInfo("[TRACE][~VideoStateData] <<< EXIT");
 }
 
 /**
@@ -43,11 +46,15 @@ VideoStateData::~VideoStateData()
  */
 void VideoStateData::delete_video_state()
 {
+    qInfo("[TRACE][VideoStateData::delete_video_state] >>> ENTER, m_pState=%p", (void*)m_pState);
     if (m_pState)
     {
+        qInfo("[TRACE][VideoStateData::delete_video_state] -- stream_close() BEGIN");
         stream_close(m_pState);
+        qInfo("[TRACE][VideoStateData::delete_video_state] -- stream_close() DONE");
         m_pState = nullptr;
     }
+    qInfo("[TRACE][VideoStateData::delete_video_state] <<< EXIT");
 }
 
 /**
@@ -452,8 +459,10 @@ void VideoStateData::read_thread_exit_wait(VideoState* is)
     if (is->threads.read_tid)
     {
         av_log(nullptr, AV_LOG_INFO, "read thread wait before!\n");
+        qInfo("[TRACE][read_thread_exit_wait] waiting read_tid=%p", (void*)is->threads.read_tid);
         // Qt 的 wait() 会阻塞当前线程，直到目标线程 run() 返回
         is->threads.read_tid->wait();
+        qInfo("[TRACE][read_thread_exit_wait] read_tid wait DONE");
         av_log(nullptr, AV_LOG_INFO, "read thread wait after!\n");
         // 回收后清空指针，避免重复 wait
         is->threads.read_tid = nullptr;
@@ -477,33 +486,44 @@ void VideoStateData::threads_exit_wait(VideoState* is)
     // 所以 stream_close 里要确保先 abort 再 join
     if (is->threads.video_play_tid)
     {
+        qInfo("[TRACE][threads_exit_wait] waiting video_play_tid=%p", (void*)is->threads.video_play_tid);
         is->threads.video_play_tid->wait();
+        qInfo("[TRACE][threads_exit_wait] video_play_tid wait DONE");
         is->threads.video_play_tid = nullptr;
     }
 
     if (is->threads.audio_play_tid)
     {
+        qInfo("[TRACE][threads_exit_wait] waiting audio_play_tid=%p", (void*)is->threads.audio_play_tid);
         is->threads.audio_play_tid->wait();
+        qInfo("[TRACE][threads_exit_wait] audio_play_tid wait DONE");
         is->threads.audio_play_tid = nullptr;
     }
 
     if (is->threads.video_decode_tid)
     {
+        qInfo("[TRACE][threads_exit_wait] waiting video_decode_tid=%p", (void*)is->threads.video_decode_tid);
         is->threads.video_decode_tid->wait();
+        qInfo("[TRACE][threads_exit_wait] video_decode_tid wait DONE");
         is->threads.video_decode_tid = nullptr;
     }
 
     if (is->threads.audio_decode_tid)
     {
+        qInfo("[TRACE][threads_exit_wait] waiting audio_decode_tid=%p", (void*)is->threads.audio_decode_tid);
         is->threads.audio_decode_tid->wait();
+        qInfo("[TRACE][threads_exit_wait] audio_decode_tid wait DONE");
         is->threads.audio_decode_tid = nullptr;
     }
 
     if (is->threads.subtitle_decode_tid)
     {
+        qInfo("[TRACE][threads_exit_wait] waiting subtitle_decode_tid=%p", (void*)is->threads.subtitle_decode_tid);
         is->threads.subtitle_decode_tid->wait();
+        qInfo("[TRACE][threads_exit_wait] subtitle_decode_tid wait DONE");
         is->threads.subtitle_decode_tid = nullptr;
     }
+    qInfo("[TRACE][threads_exit_wait] <<< EXIT (all joined)");
 }
 
 /**
@@ -515,17 +535,22 @@ void VideoStateData::threads_exit_wait(VideoState* is)
 void VideoStateData::stream_close(VideoState* is)
 {
     assert(is);
+    qInfo("[TRACE][stream_close] >>> ENTER, is=%p, audio_stream=%d, video_stream=%d, subtitle_stream=%d",
+          (void*)is, is->audio_stream, is->video_stream, is->subtitle_stream);
 
     // ★ 步骤 1：先设置 abort 标志
     // 这一行会让所有线程的循环检查到 abort_request 后自己退出
     // ★ 顺序很关键：必须先 abort 再 join
     //   如果先 join，线程可能卡在条件变量上永远不退（死锁）
     is->abort_request = 1;
+    qInfo("[TRACE][stream_close] -- step1: abort_request=1 DONE");
 
     // ★ 步骤 2：等读线程退出
     // 读线程是"源头"，要先关掉它，否则它会一直往队列里塞包
     //   解码线程会一直从空队列 sleep，没人叫醒它——但 abort 标志会叫醒它
+    qInfo("[TRACE][stream_close] -- step2: read_thread_exit_wait() BEGIN");
     read_thread_exit_wait(is);
+    qInfo("[TRACE][stream_close] -- step2: read_thread_exit_wait() DONE");
 
     // if (is->read_thread_exit == 0)
     //{
@@ -538,19 +563,26 @@ void VideoStateData::stream_close(VideoState* is)
     /* close each stream */
     // ★ 步骤 3：依次关音频/视频/字幕流
     // stream_component_close 内部会：decoder_abort（让解码线程退出）+ decoder_destroy（释放资源）
+    qInfo("[TRACE][stream_close] -- step3: stream_component_close(audio) BEGIN");
     if (is->audio_stream >= 0)
         stream_component_close(is, is->audio_stream);
+    qInfo("[TRACE][stream_close] -- step3: stream_component_close(video) BEGIN");
     if (is->video_stream >= 0)
         stream_component_close(is, is->video_stream);
+    qInfo("[TRACE][stream_close] -- step3: stream_component_close(subtitle) BEGIN");
     if (is->subtitle_stream >= 0)
         stream_component_close(is, is->subtitle_stream);
+    qInfo("[TRACE][stream_close] -- step3: stream_component_close ALL DONE");
 
     // ★ 步骤 4：join 所有工作线程，等所有线程手上的活干完
     // 注意：必须在 stream_component_close 之后 join，因为 decoder_abort 只是设了 flag
     // 真正让线程退出还需要在 stream_component_close 中断流的 PacketQueue
+    qInfo("[TRACE][stream_close] -- step4: threads_exit_wait() BEGIN");
     threads_exit_wait(is); // read and decode threads exit here.
+    qInfo("[TRACE][stream_close] -- step4: threads_exit_wait() DONE");
 
     // 关 FormatContext（释放文件读取相关资源）
+    qInfo("[TRACE][stream_close] -- step5: avformat_close_input() BEGIN");
     avformat_close_input(&is->ic);
 
     // 销毁 3 个 PacketQueue
@@ -563,6 +595,7 @@ void VideoStateData::stream_close(VideoState* is)
     frame_queue_destory(&is->pictq);
     frame_queue_destory(&is->sampq);
     frame_queue_destory(&is->subpq);
+    qInfo("[TRACE][stream_close] -- step5: queues destroyed DONE");
 
     if (is->continue_read_thread)
     {
@@ -572,10 +605,13 @@ void VideoStateData::stream_close(VideoState* is)
 
     // SDL_DestroyCond(is->continue_read_thread);
     // 释放 swscale 上下文（视频颜色空间转换用）
+    qInfo("[TRACE][stream_close] -- step6: sws_freeContext(img_convert_ctx=%p, sub_convert_ctx=%p)",
+          (void*)is->img_convert_ctx, (void*)is->sub_convert_ctx);
     sws_freeContext(is->img_convert_ctx);
     sws_freeContext(is->sub_convert_ctx);
     // 释放文件名字符串
     av_free(is->filename);
+    qInfo("[TRACE][stream_close] -- step6: sws/filename freed DONE");
     /*if (is->vis_texture)
           SDL_DestroyTexture(is->vis_texture);
   if (is->vid_texture)
@@ -584,7 +620,9 @@ void VideoStateData::stream_close(VideoState* is)
           SDL_DestroyTexture(is->sub_texture);*/
 
     // 最后释放 VideoState 本身
+    qInfo("[TRACE][stream_close] -- step7: av_free(is=%p)", (void*)is);
     av_free(is);
+    qInfo("[TRACE][stream_close] <<< EXIT");
 }
 
 /**
@@ -751,7 +789,9 @@ void VideoStateData::close_hardware()
     //   1) close_hardware 解一次（这里）
     //   2) avcodec_close 时解第二次
     //   少解一次 → 显存泄漏
+    qInfo("[TRACE][close_hardware] m_hw_device_ctx=%p", (void*)m_hw_device_ctx);
     av_buffer_unref(&m_hw_device_ctx);
+    qInfo("[TRACE][close_hardware] DONE");
 }
 
 /**

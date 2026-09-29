@@ -140,7 +140,10 @@ typedef struct MyAVPacketList
  *   只限 15MB
  *      4K：15MB / 50MB/s = 0.3 秒就满了 → 限流很严
  *      360p：15MB / 0.1MB/s = 150 秒才满 → 几乎不限流
- *   - abort_request: 1 请求所有线程中止运行（用于让阻塞中的线程退出）
+ *   - abort_request: 1 停止标志。当用户点击停止，MainWindow 设置 abort_request = 1，
+ *   然后 cond->wakeAll() 唤醒所有阻塞在队列上的线程。
+ *   线程醒来后检测到 abort_request == 1，立即退出循环。
+
  *   - serial: 当前播放的序号
  *   - mutex/cond: Qt 的互斥锁和条件变量，实现线程同步
  */
@@ -187,7 +190,7 @@ typedef struct AudioParams
  * 字段解释：
  *   - pts: 时钟当前指向的 PTS（presentation time stamp，显示时间戳）
  *   - pts_drift: 漂移量（用于校准系统时间带来的误差）
- *   - last_updated: 上次更新时钟的真实时间
+ *   - last_updated: 上次更新时钟的真实时间，相当于是一个参考点
  *   - speed: 倍速（1.0 为正常速度）
  *   - serial: 时钟所属的播放序号（seek 后会变）
  *   - paused: 是否暂停

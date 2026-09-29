@@ -11,6 +11,7 @@
 #include <QQueue>
 #include <QThread>
 #include <QWaitCondition>
+#include <atomic>          // std::atomic：m_bExitThread 跨线程读写
 #include <memory>
 #include "packets_sync.h"
 
@@ -64,6 +65,11 @@ public:
     // 初始化音频设备（采样率、声道、采样格式、音量）
     bool init_device(int sample_rate = 8000, int channel = 1, AVSampleFormat sample_fmt = AV_SAMPLE_FMT_S16, float default_vol = 0.8);
     void stop_device();          // 停止音频设备
+    // ★ 音频设备是否已初始化（m_pOutput 是否已创建）
+    //   用途：QAudioSink 必须在 GUI 线程创建（线程亲和性），
+    //         所以把它从 StartPlayThread 挪到 MainWindow::play_started() 里，
+    //         该函数用来判断"是否还需要初始化"。
+    bool device_ready() const { return m_pOutput != nullptr; }
     void play_file(const QString& file);  // 播放本地文件（调试用）
     void play_buf(const uint8_t* buf, int datasize);  // 播放一段原始 PCM
     // 初始化音频重采样参数（把解码出的音频格式转成 Qt 设备要求的格式）
@@ -99,7 +105,7 @@ private:
     QIODevice* m_audioDevice{nullptr};      // 实际写入音频数据的 IO 设备
     VideoState* m_pState{nullptr};          // 共享播放状态
     Audio_Resample m_audioResample;         // 重采样上下文
-    bool m_bExitThread{false};              // 退出标志
+    std::atomic<bool> m_bExitThread{false}; // 退出标志（由主线程写、本线程读，必须原子）
     bool m_bSendToVisual{false};            // 是否发送数据给可视化窗口
     // ★ 防止 stop_device / 析构函数二次调用 m_pOutput->stop() 导致 QAudioSink 状态崩溃
     std::atomic<bool> m_bDeviceStopped{false};

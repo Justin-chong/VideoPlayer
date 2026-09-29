@@ -16,7 +16,7 @@
  * @param file   下一个要播放的文件（空 = 不继续播放）
  */
 StopWaitingThread::StopWaitingThread(QObject* parent, const QString& file)
-    : QThread(parent), m_file(file)
+    : QThread(parent), m_file(file), m_pMainWnd(qobject_cast<MainWindow*>(parent))
 {
 }
 
@@ -26,6 +26,8 @@ StopWaitingThread::StopWaitingThread(QObject* parent, const QString& file)
  */
 StopWaitingThread::~StopWaitingThread()
 {
+    qInfo("[TRACE][~StopWaitingThread] this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
 }
 
 /**
@@ -42,13 +44,15 @@ StopWaitingThread::~StopWaitingThread()
  */
 void StopWaitingThread::run()
 {
-    MainWindow* pMainWnd = (MainWindow*)parent();
     // ★ 先发信号让主窗口开始停止流程
     emit stopPlay();
 
     // ★ 轮询等待主窗口停止完毕（每 2ms 查一次）
-    //    不能用 wait 死等，因为主窗口必须有机会处理事件循环
-    while (pMainWnd && pMainWnd->is_playing())
+    //    不能用 wait 死等，因为主窗口必须有机会处理事件循环。
+    //    ★ 这里用构造时保存的 QPointer，而不是 parent()：本线程"退休"时
+    //      已从 MainWindow 的父子树上被摘下来，parent() 会是 null；
+    //      主窗口如果先销毁，QPointer 也会自动变 null，循环能安全退出。
+    while (m_pMainWnd && m_pMainWnd->is_playing())
     {
         msleep(2);
     }

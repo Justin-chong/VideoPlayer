@@ -15,6 +15,8 @@ AudioDecodeThread::AudioDecodeThread(QObject* parent, VideoState* pState)
 
 AudioDecodeThread::~AudioDecodeThread()
 {
+    qInfo("[TRACE][~AudioDecodeThread] this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
 }
 
 /**

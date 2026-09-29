@@ -4,6 +4,7 @@
 #include <QImage>             // Qt 的图像类（最终显示给用户看的）
 #include <QRegularExpression>
 #include <QThread>
+#include <atomic>             // std::atomic：m_bExitThread 跨线程读写
 #include "packets_sync.h"
 
 // 调试开关：是否打印视频缓冲信息
@@ -78,7 +79,7 @@ private:
 private:
     VideoState* m_pState{nullptr};   // 共享播放状态
     Video_Resample m_Resample;       // 缩放/转换上下文
-    bool m_bExitThread{false};       // 退出标志
+    std::atomic<bool> m_bExitThread{false};  // 退出标志（由主线程写、本线程读，必须原子）
 
     // ASS 字幕解析用的正则表达式
     const static QRegularExpression m_assFilter;

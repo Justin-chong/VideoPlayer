@@ -15,6 +15,8 @@ SubtitleDecodeThread::SubtitleDecodeThread(QObject* parent, VideoState* pState)
 
 SubtitleDecodeThread::~SubtitleDecodeThread()
 {
+    qInfo("[TRACE][~SubtitleDecodeThread] this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
 }
 
 /**

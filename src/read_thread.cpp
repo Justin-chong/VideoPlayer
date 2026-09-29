@@ -21,6 +21,8 @@ ReadThread::ReadThread(QObject* parent, VideoState* pState)
 
 ReadThread::~ReadThread()
 {
+    qInfo("[TRACE][~ReadThread] this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
 }
 
 void ReadThread::set_video_state(VideoState* pState)

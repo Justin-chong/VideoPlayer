@@ -29,6 +29,60 @@
 #endif
 
 /**
+ * @brief 安全"退休"一个一次性的后台工作线程
+ *
+ * 本项目有三处"用完就换新"的一次性线程：StartPlayThread（音频设备预处理）、
+ * YoutubeUrlThread（链接解析）、StopWaitingThread（等停止完成）。
+ * 它们都持有 std::unique_ptr 成员，新请求到来时会把上一个顶掉。
+ *
+ * ★ 为什么不能直接 reset()：
+ *   1. 上一个线程**可能还在跑**。析构一个 isRunning() 的 QThread 会直接
+ *      qFatal("QThread: Destroyed while thread is still running") → abort()。
+ *      例：打开文件 A 后音频设备还在初始化（约 216ms），此时点停止再打开文件 B，
+ *      is_playing() 已经为 false → 直接进 start_play() → reset() 删掉还在跑的
+ *      StartPlayThread → 崩溃。
+ *   2. 上一个线程**已经 emit、但还排在事件队列里等着投递**的信号，
+ *      其 sender 正是被删掉的那个 QThread 对象 → 投递时 UAF → abort()。
+ *      （项目里"点停止崩"就是同一个病，见 *_stopped 槽改用 deleteLater 的修复）
+ *
+ * ★ 这里做的事：
+ *   1. 切断该线程发出的所有信号 —— 上一轮的 audio_device_init / startPlay /
+ *      resultReady 绝不能落到本轮流程上，否则会拿旧文件、旧状态去驱动新一次播放
+ *      （例：排队等待时用户又点了另一个文件，旧线程的 startPlay(旧文件) 必须作废）
+ *   2. 延后删除，并保证"线程退出"发生在"对象被删"之前：
+ *      - 还在跑 → 连 finished 信号，等它自己结束后 deleteLater
+ *      - 已跑完 → 直接 deleteLater（排在该处理的事件之后，不会插到 pending 信号前面）
+ *
+ * ★ 故意**不**用 wait()：StopWaitingThread 的退出依赖 GUI 线程继续跑事件循环
+ *   （它在轮询 is_playing()，靠 stop_play() 推进），在 GUI 线程 wait() 会直接死锁。
+ *
+ * @param pThread 要退休的线程；调用方应传 unique_ptr::release() 出来的裸指针
+ */
+static void retire_worker_thread(QThread* pThread)
+{
+    if (!pThread)
+        return;
+
+    qInfo("[RETIRE] thread=%p, class=%s, isRunning=%d",
+          (void*)pThread, pThread->metaObject()->className(), (int)pThread->isRunning());
+
+    // 1. 切断它发出的所有信号（先断，再决定怎么删）
+    pThread->disconnect();
+
+    // 2. 从父子树上摘下来。这三个线程的 parent 是 MainWindow，若保留父子关系，
+    //    MainWindow 析构时 ~QObject 会级联删除所有 children —— 又变成"析构正在运行的
+    //    QThread" → qFatal。摘下后由下面的 deleteLater 自行收尾。
+    //    （线程内部已改为用构造时保存的 QPointer，不再依赖 parent()）
+    pThread->setParent(nullptr);
+
+    // 3. 延后删除，且保证线程已退出才删对象
+    if (pThread->isRunning())
+        QObject::connect(pThread, &QThread::finished, pThread, &QObject::deleteLater);
+    else
+        pThread->deleteLater();
+}
+
+/**
  * @brief MainWindow 构造函数 - 整个 UI 的初始化入口
  *
  * 1. 加载 .ui 描述文件
@@ -52,7 +106,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(std::make_uniq
 
     // ★ 按顺序创建所有子窗口和菜单
     create_video_label();
-    create_play_control();
+    create_play_control();//构造播放控制条
     create_style_menu();
     create_recentfiles_menu();
     create_cv_action_group();
@@ -110,6 +164,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent), ui(std::make_uniq
  */
 MainWindow::~MainWindow()
 {
+    // ★ 先退休三个一次性辅助线程，再停止播放，顺序不能反：
+    //   1. 它们可能还在跑（YoutubeUrlThread 解析要 5~30s，StartPlayThread 在初始化音频设备，
+    //      StopWaitingThread 在轮询），留着不管，后面成员 unique_ptr 隐式析构、
+    //      或 ~QObject 级联删 children，都会"析构正在运行的 QThread" → qFatal
+    //   2. retire 里断开了它们的信号，所以 stop_play() 期间 StopWaitingThread 即使
+    //      发现"已经停了"，也不会再 emit startPlay 拉起新一轮播放
+    retire_worker_thread(m_pBeforePlayThread.release());
+    retire_worker_thread(m_pYoutubeUrlThread.release());
+    retire_worker_thread(m_pStopplayWaitingThread.release());
+
     stop_play();
     save_settings();
 }
@@ -205,14 +269,21 @@ void MainWindow::create_audio_effect()
  */
 void MainWindow::show_audio_effect(bool bShow)
 {
+    qInfo("[TRACE][show_audio_effect] >>> ENTER, bShow=%d, wnd=%p",
+          (int)bShow, m_audio_effect_wnd.get());
     if (!m_audio_effect_wnd)
+    {
+        qInfo("[TRACE][show_audio_effect] <<< EXIT (no wnd)");
         return;
+    }
 
     // ★ 把窗口几何中心对齐到主窗口几何中心
     auto pt = frameGeometry().center() - m_audio_effect_wnd->rect().center();
     m_audio_effect_wnd->move(pt);
+    qInfo("[TRACE][show_audio_effect] move DONE");
     // ★ 每次显示前清空 OpenGL 画布（避免上一帧残留）
     m_audio_effect_wnd->paint_clear();
+    qInfo("[TRACE][show_audio_effect] paint_clear DONE");
 
     if (bShow)
     {
@@ -222,6 +293,7 @@ void MainWindow::show_audio_effect(bool bShow)
     {
         m_audio_effect_wnd->hide();
     }
+    qInfo("[TRACE][show_audio_effect] <<< EXIT");
 }
 
 /**
@@ -587,9 +659,12 @@ void MainWindow::update_play_control()
  */
 void MainWindow::set_default_bkground()
 {
+    qInfo("[TRACE][set_default_bkground] >>> ENTER");
     // ★ ":/images/" 是 Qt 资源路径前缀，图片在编译时打包到 exe 里
     QImage img(":/images/res/music.png");
+    qInfo("[TRACE][set_default_bkground] image loaded, isNull=%d", (int)img.isNull());
     update_image(img);
+    qInfo("[TRACE][set_default_bkground] <<< EXIT");
 }
 
 /**
@@ -1384,9 +1459,13 @@ void MainWindow::hide_play_control(bool bHide)
  */
 void MainWindow::set_paly_control_wnd(bool set)
 {
+    qInfo("[TRACE][set_paly_control_wnd] >>> ENTER, set=%d", (int)set);
     auto pPlayControl = get_play_control();
     if (!pPlayControl)
+    {
+        qInfo("[TRACE][set_paly_control_wnd] <<< EXIT (no play control)");
         return;
+    }
 
     if (set)
     {
@@ -1409,6 +1488,8 @@ void MainWindow::set_paly_control_wnd(bool set)
     {
         pPlayControl->clear_all();
     }
+
+    qInfo("[TRACE][set_paly_control_wnd] <<< EXIT (normal)");
 }
 
 /**
@@ -1757,6 +1838,50 @@ void MainWindow::on_actionAbout_triggered()
  */
 void MainWindow::play_started(bool ret)
 {
+    qInfo("[TRACE][play_started] >>> ENTER, ret=%d, audio_play_thread=%p, is_gui_thread=%d",
+          (int)ret, (void*)m_pAudioPlayThread.get(),
+          (int)(QThread::currentThread() == this->thread()));
+
+    // ★★★ 2026-09-24 修复：QAudioSink 必须在 GUI 线程创建 ★★★
+    //   原先是在 StartPlayThread（后台线程）里 new QAudioSink + start()，
+    //   而它同时被 AudioPlayThread 写、被 GUI 线程 stop/reset/析构 —— 跨线程操作
+    //   QAudioSink（内部带 QTimer，有线程亲和性）是未定义行为，会直接 abort()。
+    //   现在统一收到这里（GUI 线程）创建；stop/reset/析构也都在 GUI 线程，两边一致。
+    if (ret && m_pAudioPlayThread && !m_pAudioPlayThread->device_ready())
+    {
+        qInfo("[TRACE][play_started] -- init audio device on GUI thread BEGIN");
+        if (auto pVideoState = m_pVideoState.get())
+        {
+            if (auto pAudio = pVideoState->get_contex(AVMEDIA_TYPE_AUDIO))
+            {
+                // ★ 拿到用户当前设置的音量（false=只读取，不触发 mute 状态）
+                float vol = volume_settings(false);
+                // ★ 输出音频固定用 S16 格式（Qt 6 QAudioSink 推荐格式）
+                const AVSampleFormat sample_fmt = AV_SAMPLE_FMT_S16;
+                VideoState* is = pVideoState->get_state();
+
+                // 1. 创建音频设备（new QAudioSink + start）
+                ret = m_pAudioPlayThread->init_device(pAudio->sample_rate,
+                                                      pAudio->ch_layout.nb_channels,
+                                                      sample_fmt, vol);
+                if (!ret)
+                {
+                    qWarning("audio play init_device failed.");
+                }
+                else
+                {
+                    // 2. 初始化重采样（把解码出的任意格式转成 S16）
+                    ret = m_pAudioPlayThread->init_resample_param(pAudio, sample_fmt, is);
+                    if (!ret)
+                    {
+                        qWarning("audio play init resample param failed.");
+                    }
+                }
+            }
+        }
+        qInfo("[TRACE][play_started] -- init audio device on GUI thread DONE, ret=%d", (int)ret);
+    }
+
     // ★ ret=false 表示音频设备初始化失败（但视频依然能播）
     if (!ret)
     {
@@ -1766,6 +1891,7 @@ void MainWindow::play_started(bool ret)
     // ★ 启动所有线程 + 把线程指针注册到 VideoState
     all_thread_start();
     set_threads();
+    qInfo("[TRACE][play_started] <<< EXIT");
 }
 
 /**
@@ -1853,6 +1979,12 @@ void MainWindow::start_to_play(const QString& file)
  */
 void MainWindow::wait_stop_play(const QString& file)
 {
+    // ★ 上一轮的等待线程可能还在轮询 is_playing()，先安全退休再换新。
+    //    它的目标文件随之作废 —— 排队时用户又点了别的文件，只有最后点的那个算数，
+    //    这正是 retire 里"切断信号"要保证的（否则旧线程会 emit startPlay(旧文件)）。
+    //    注意不能 wait()：旧线程要等 GUI 线程推进 is_playing() 才能退出，会死锁。
+    retire_worker_thread(m_pStopplayWaitingThread.release());
+
     m_pStopplayWaitingThread = std::make_unique<StopWaitingThread>(this, file);
     // ★ 旧文件停完后，发 stopPlay 通知主窗口
     connect(m_pStopplayWaitingThread.get(), &StopWaitingThread::stopPlay, this, &MainWindow::stop_play);
@@ -2152,6 +2284,7 @@ void MainWindow::all_thread_start()
  */
 void MainWindow::stop_play()
 {
+    qInfo("[TRACE][stop_play] >>> ENTER");
     try
     {
         // ★ 防重入：read_packet_stopped 和 on_playback_finished 可能同时触发 stop_play
@@ -2160,6 +2293,7 @@ void MainWindow::stop_play()
             !m_pPacketReadThread && !m_pDecodeVideoThread && !m_pDecodeAudioThread)
         {
             qInfo("[stop_play] already stopped, skip");
+            qInfo("[TRACE][stop_play] <<< EXIT (already stopped, skip)");
             return;
         }
 
@@ -2180,6 +2314,38 @@ void MainWindow::stop_play()
         //           安全 wait（线程已退出，wait 立即返回）。
         //           等 stream_close() 走完，事件循环处理 queued finished 信号时，
         //           video_play_stopped()/audio_play_stopped() 槽函数才会安全 reset unique_ptr。
+
+        //2026.9.24添加，修复死锁
+        /*死锁出现原因
+         原本是先等待视频播放线程退出，再等待音频播放线程退出，
+        这两个线程退出后再关闭流，关闭流之前设置abort_request=1，
+         但我忽略了一个问题，音频播放线程run过程中有阻塞点，
+        音频播放线程一直被阻塞，走不到delete_video_state这步，
+        导致循环等待死锁，假如音频播放线程中没有阻塞点，
+        整个流程是没问题的，可以走到delete_video_state
+         解决方法是在视频播放线程和音频播放线程前，
+        唤醒所有可能阻塞的队列，设置线程退出标志abort_request=1，
+        这样子线程退出时无论有没有阻塞点都可以退出
+         */
+        // ★ 先唤醒所有可能阻塞的队列，让音频线程能从 cond->wait() 里醒过来
+        qInfo("[TRACE][stop_play] -- step1/6 abort + signal queues: BEGIN");
+        if (m_pVideoState)
+        {
+            if (auto is = m_pVideoState->get_state())
+            {
+                is->abort_request = 1;
+                packet_queue_abort(&is->videoq);
+                packet_queue_abort(&is->audioq);    // ← 这里会唤醒 audioq 的 cond->wait
+                packet_queue_abort(&is->subtitleq);
+                frame_queue_signal(&is->pictq);
+                frame_queue_signal(&is->sampq);
+                frame_queue_signal(&is->subpq);
+            }
+        }
+        qInfo("[TRACE][stop_play] -- step1/6 abort + signal queues: DONE");
+
+        //等待子线程退出
+        qInfo("[TRACE][stop_play] -- step2/6 m_pVideoPlayThread->stop_thread(): BEGIN");
         if (m_pVideoPlayThread)
         {
             qInfo("[stop_play] stopping video play thread...");
@@ -2187,6 +2353,9 @@ void MainWindow::stop_play()
             // ★ 故意不 reset：让 stream_close() 安全 wait，槽函数最后再 reset
             qInfo("[stop_play] video play thread stopped");
         }
+        qInfo("[TRACE][stop_play] -- step2/6 m_pVideoPlayThread->stop_thread(): DONE");
+
+        qInfo("[TRACE][stop_play] -- step3/6 m_pAudioPlayThread->stop_thread(): BEGIN");
         if (m_pAudioPlayThread)
         {
             qInfo("[stop_play] stopping audio play thread...");
@@ -2194,24 +2363,49 @@ void MainWindow::stop_play()
             // ★ 故意不 reset：让 stream_close() 安全 wait，槽函数最后再 reset
             qInfo("[stop_play] audio play thread stopped");
         }
+        qInfo("[TRACE][stop_play] -- step3/6 m_pAudioPlayThread->stop_thread(): DONE");
+
+        // ★ step3.5：音频线程已经退出，在这一刻同步停掉音频设备
+        //   为什么不留给 ~AudioPlayThread 里那次：析构是由 audio_play_stopped() 里的
+        //   deleteLater() 触发的，属于**异步**，执行时机不确定。快速连续切换文件
+        //   （A→B→C）时，旧的 QAudioSink 可能还没被停掉/销毁，新的文件已经开始创建
+        //   新的 QAudioSink，两轮重叠 → 旧 sink 内部 ring buffer 被并发访问 →
+        //   Q_ASSERT(bytes <= bufferSize) 失败（Debug 版弹 "Debug Error!"）。
+        //   放在这里停，时机就完全确定了：音频线程已 wait() 退出，不可能再有 write()。
+        //   stop_device() 内部有 m_bDeviceStopped 幂等保护，后面析构里那次会自动跳过。
+        qInfo("[TRACE][stop_play] -- step3.5/6 m_pAudioPlayThread->stop_device(): BEGIN");
+        if (m_pAudioPlayThread)
+        {
+            m_pAudioPlayThread->stop_device();
+        }
+        qInfo("[TRACE][stop_play] -- step3.5/6 m_pAudioPlayThread->stop_device(): DONE");
 
         // ★ 步骤：释放 VideoStateData（其析构会发 abort 给 read/decode 线程 + free is）
         //   此时两个 play thread 都已退出，is 不会被访问
+        qInfo("[TRACE][stop_play] -- step4/6 delete_video_state(): BEGIN");
         delete_video_state();
+        qInfo("[TRACE][stop_play] -- step4/6 delete_video_state(): DONE");
+
         // ★ 清空播放控件（恢复未播放状态）
+        qInfo("[TRACE][stop_play] -- step5/6 set_paly_control_wnd(false): BEGIN");
         set_paly_control_wnd(false);
+        qInfo("[TRACE][stop_play] -- step5/6 set_paly_control_wnd(false): DONE");
+
         // ★ 清空字幕
+        qInfo("[TRACE][stop_play] -- step6/6 clear_subtitle_str(): BEGIN");
         clear_subtitle_str();
+        qInfo("[TRACE][stop_play] -- step6/6 clear_subtitle_str(): DONE");
 
         qInfo("[stop_play] done");
+        qInfo("[TRACE][stop_play] <<< EXIT (normal)");
     }
     catch (const std::exception& e)
     {
-        qWarning("[stop_play] caught std::exception: %s", e.what());
+        qWarning("[TRACE][stop_play] !!! caught std::exception: %s", e.what());
     }
     catch (...)
     {
-        qWarning("[stop_play] caught unknown exception");
+        qWarning("[TRACE][stop_play] !!! caught unknown exception");
     }
 }
 
@@ -2338,7 +2532,9 @@ void MainWindow::delete_video_state()
     //旧的对象会被自动 delete
     //无参数则是清空
     //有参数则是换一个新的
-    m_pVideoState.reset();
+    qInfo("[TRACE][delete_video_state] reset() BEGIN, ptr=%p", m_pVideoState.get());
+    m_pVideoState.reset();   // ← 这里会跑 ~VideoStateData -> stream_close，可能阻塞/崩
+    qInfo("[TRACE][delete_video_state] reset() DONE, ptr=%p", m_pVideoState.get());
 }
 
 /**
@@ -2533,6 +2729,8 @@ bool MainWindow::create_audio_play_thread()
             m_pAudioPlayThread = std::make_unique<AudioPlayThread>(this, pState);
 
             // ★ 三个信号：线程退出、停止命令、播放时间更新、可视化数据
+            //首先是mainwindow发送stop_audio_play_thread信号，被m_pAudioPlayThread.get()接收到后，调用&AudioPlayThread::stop_thread，
+            //再主线程中调用stop_thread，阻塞主线程，等待子线程结束，子线程结束发送finished信号给主线程，触发audio_play_stopped，进行后续清理操作
             connect(m_pAudioPlayThread.get(), &AudioPlayThread::finished, this, &MainWindow::audio_play_stopped);
             connect(this, &MainWindow::stop_audio_play_thread, m_pAudioPlayThread.get(), &AudioPlayThread::stop_thread);
             connect(m_pAudioPlayThread.get(), &AudioPlayThread::update_play_time, this, &MainWindow::update_play_time);
@@ -2623,10 +2821,11 @@ void MainWindow::adjust_window_size(QSize& size)
  */
 bool MainWindow::start_play_thread()
 {
-    m_pBeforePlayThread.reset();
+    // ★ 先安全退休上一轮的预处理线程：它可能还在初始化音频设备，
+    //    直接 reset() 会析构一个正在运行的 QThread → qFatal → abort
+    retire_worker_thread(m_pBeforePlayThread.release());
 
     m_pBeforePlayThread = std::make_unique<StartPlayThread>(this);
-    // connect(m_pBeforePlayThread.get(), &StartPlayThread::finished, m_pBeforePlayThread.get(), &QObject::deleteLater);
     connect(m_pBeforePlayThread.get(), &StartPlayThread::audio_device_init, this, &MainWindow::play_started);
     m_pBeforePlayThread->start();
     qDebug("++++++++++ start play thread(audio device initial) started.");
@@ -2643,6 +2842,13 @@ bool MainWindow::start_play_thread()
  */
 void MainWindow::image_ready(const QImage& img)
 {
+    // ★ 停止播放后，事件队列里还可能残留着上一轮的 frame_ready 事件。
+    //    此时播放会话（m_pVideoState）已经销毁，再贴这一帧就是"停止后闪一下旧画面"。
+    //    直接丢弃。（这个残留正是 *_stopped 槽改用 deleteLater 的代价 ——
+    //    换来的是不会因为 sender 提前消失而 UAF，这里补上语义上的收尾。）
+    if (!m_pVideoState)
+        return;
+
     // ★ 拷贝一份 QImage（避免后台线程继续修改时主线程用着出问题）
     QImage image = img.copy();
 
@@ -2839,7 +3045,9 @@ void MainWindow::set_subtitle(const QString& str)
  */
 void MainWindow::clear_subtitle_str()
 {
+    qInfo("[TRACE][clear_subtitle_str] >>> ENTER");
     set_subtitle("");
+    qInfo("[TRACE][clear_subtitle_str] <<< EXIT");
 }
 
 /**
@@ -2849,10 +3057,16 @@ void MainWindow::clear_subtitle_str()
  */
 void MainWindow::update_image(const QImage& img)
 {
+    qInfo("[TRACE][update_image] >>> ENTER, imgNull=%d", (int)img.isNull());
     auto pLabel = get_video_label();
+    qInfo("[TRACE][update_image] video_label=%p", (void*)pLabel);
     // ★ 空图就不贴（避免覆盖默认背景）
     if (!img.isNull() && pLabel)
+    {
         pLabel->setPixmap(QPixmap::fromImage(img));
+        qInfo("[TRACE][update_image] setPixmap DONE");
+    }
+    qInfo("[TRACE][update_image] <<< EXIT");
 }
 
 /**
@@ -2862,14 +3076,22 @@ void MainWindow::update_image(const QImage& img)
  */
 void MainWindow::read_packet_stopped()
 {
+    qInfo("[TRACE][read_packet_stopped] >>> ENTER, ptr=%p", m_pPacketReadThread.get());
     // ★ 防重入：stop_play 中可能已 reset 过
     if (!m_pPacketReadThread)
+    {
+        qInfo("[TRACE][read_packet_stopped] <<< EXIT (already null)");
         return;
-    m_pPacketReadThread.reset();
+    }
+    // ★ 同样改为 release + deleteLater（详见 video_play_stopped 里的说明）
+    if (auto* pThread = m_pPacketReadThread.release())
+        pThread->deleteLater();
     qDebug("************* Read  packets thread stopped.");
+    qInfo("[TRACE][read_packet_stopped] -- calling stop_play()");
 
     // ★ 读线程退出意味着播放已结束
     stop_play();
+    qInfo("[TRACE][read_packet_stopped] <<< EXIT (normal)");
 }
 
 /**
@@ -2877,13 +3099,21 @@ void MainWindow::read_packet_stopped()
  */
 void MainWindow::decode_video_stopped()
 {
+    qInfo("[TRACE][decode_video_stopped] >>> ENTER, ptr=%p", m_pDecodeVideoThread.get());
     // ★ 防重入
     if (!m_pDecodeVideoThread)
+    {
+        qInfo("[TRACE][decode_video_stopped] <<< EXIT (already null)");
         return;
-    m_pDecodeVideoThread.reset();
+    }
+    // ★ 同样改为 release + deleteLater（详见 video_play_stopped 里的说明）
+    if (auto* pThread = m_pDecodeVideoThread.release())
+        pThread->deleteLater();
+    qInfo("[TRACE][decode_video_stopped] -- release+deleteLater done, calling update_menus()");
     // ★ 线程变了，菜单可用状态也要刷新
     update_menus();
     qDebug("************* Video decode thread stopped.");
+    qInfo("[TRACE][decode_video_stopped] <<< EXIT (normal)");
 }
 
 /**
@@ -2891,11 +3121,19 @@ void MainWindow::decode_video_stopped()
  */
 void MainWindow::decode_audio_stopped()
 {
+    qInfo("[TRACE][decode_audio_stopped] >>> ENTER, ptr=%p", m_pDecodeAudioThread.get());
     if (!m_pDecodeAudioThread)
+    {
+        qInfo("[TRACE][decode_audio_stopped] <<< EXIT (already null)");
         return;
-    m_pDecodeAudioThread.reset();
+    }
+    // ★ 同样改为 release + deleteLater（详见 video_play_stopped 里的说明）
+    if (auto* pThread = m_pDecodeAudioThread.release())
+        pThread->deleteLater();
+    qInfo("[TRACE][decode_audio_stopped] -- release+deleteLater done, calling update_menus()");
     update_menus();
     qDebug("************* Audio decode thread stopped.");
+    qInfo("[TRACE][decode_audio_stopped] <<< EXIT (normal)");
 }
 
 /**
@@ -2903,11 +3141,19 @@ void MainWindow::decode_audio_stopped()
  */
 void MainWindow::decode_subtitle_stopped()
 {
+    qInfo("[TRACE][decode_subtitle_stopped] >>> ENTER, ptr=%p", m_pDecodeSubtitleThread.get());
     if (!m_pDecodeSubtitleThread)
+    {
+        qInfo("[TRACE][decode_subtitle_stopped] <<< EXIT (already null)");
         return;
-    m_pDecodeSubtitleThread.reset();
+    }
+    // ★ 同样改为 release + deleteLater（详见 video_play_stopped 里的说明）
+    if (auto* pThread = m_pDecodeSubtitleThread.release())
+        pThread->deleteLater();
+    qInfo("[TRACE][decode_subtitle_stopped] -- release+deleteLater done, calling update_menus()");
     update_menus();
     qDebug("************* Subtitle decode thread stopped.");
+    qInfo("[TRACE][decode_subtitle_stopped] <<< EXIT (normal)");
 }
 
 /**
@@ -2915,18 +3161,35 @@ void MainWindow::decode_subtitle_stopped()
  */
 void MainWindow::audio_play_stopped()
 {
+    qInfo("[TRACE][audio_play_stopped] >>> ENTER, ptr=%p", m_pAudioPlayThread.get());
     // ★ 防重入：stop_play 中已 reset
     if (!m_pAudioPlayThread)
+    {
+        qInfo("[TRACE][audio_play_stopped] <<< EXIT (already null)");
         return;
-    m_pAudioPlayThread.reset();
+    }
+    qInfo("[TRACE][audio_play_stopped] -- release + deleteLater BEGIN (会跑 ~AudioPlayThread)");
+    // ★ 关键修复：同 video_play_stopped —— 不能在此处直接 delete sender。
+    //   音频线程也发跨线程信号 data_visual_ready（audio_play_thread.cpp:374），
+    //   队列里可能还有 pending 事件，直接 reset() 会导致后续访问已释放的 sender。
+    if (auto* pThread = m_pAudioPlayThread.release())
+        pThread->deleteLater();
+    qInfo("[TRACE][audio_play_stopped] -- release + deleteLater DONE");
     qDebug("************* Audio play thread stopped.");
 
     // ★ 恢复默认背景
+    qInfo("[TRACE][audio_play_stopped] -- set_default_bkground() BEGIN");
     set_default_bkground();
+    qInfo("[TRACE][audio_play_stopped] -- set_default_bkground() DONE");
 
     // ★ 关闭音频可视化窗口
+    qInfo("[TRACE][audio_play_stopped] -- show_audio_effect(false) BEGIN");
     show_audio_effect(false);
+    qInfo("[TRACE][audio_play_stopped] -- show_audio_effect(false) DONE");
+
+    qInfo("[TRACE][audio_play_stopped] -- update_menus() BEGIN");
     update_menus();
+    qInfo("[TRACE][audio_play_stopped] <<< EXIT (normal)");
 }
 
 /**
@@ -2934,15 +3197,37 @@ void MainWindow::audio_play_stopped()
  */
 void MainWindow::video_play_stopped()
 {
+    qInfo("[TRACE][video_play_stopped] >>> ENTER, ptr=%p", m_pVideoPlayThread.get());
     // ★ 防重入：stop_play 中已 reset
     if (!m_pVideoPlayThread)
+    {
+        qInfo("[TRACE][video_play_stopped] <<< EXIT (already null)");
         return;
-    m_pVideoPlayThread.reset();
+    }
+    qInfo("[TRACE][video_play_stopped] -- release + deleteLater BEGIN (会跑 ~VideoPlayThread)");
+    // ★ 关键修复（2026-09-24，abort 崩点定位）：
+    //   不能在 finished 槽里直接 delete 线程对象！
+    //   视频线程退出前可能已经 emit 了若干跨线程 queued 信号（frame_ready /
+    //   subtitle_ready / playback_finished），这些事件此刻正排在主线程事件队列里，
+    //   而每个事件的 sender 都是这个 QThread 对象。
+    //   这里若 reset()（= delete sender），等本槽返回后 Qt 处理那些 pending 事件时
+    //   会去访问 sender（QMetaCallEvent 持有 sender 指针）→ use-after-free → abort()。
+    //   现象就是：槽内日志全部正常打完，崩溃发生在槽返回之后。
+    //   正确做法：release() 交出所有权 + deleteLater()，让事件循环在所有 pending
+    //   事件都处理完之后（事件队列空时）才真正 delete 该对象。
+    if (auto* pThread = m_pVideoPlayThread.release())
+        pThread->deleteLater();
+    qInfo("[TRACE][video_play_stopped] -- release + deleteLater DONE");
     qDebug("************* Video play thread stopped.");
 
     // ★ 恢复默认背景
+    qInfo("[TRACE][video_play_stopped] -- set_default_bkground() BEGIN");
     set_default_bkground();
+    qInfo("[TRACE][video_play_stopped] -- set_default_bkground() DONE");
+
+    qInfo("[TRACE][video_play_stopped] -- update_menus() BEGIN");
     update_menus();
+    qInfo("[TRACE][video_play_stopped] <<< EXIT (normal)");
 }
 
 /**
@@ -2957,9 +3242,11 @@ void MainWindow::video_play_stopped()
  */
 void MainWindow::on_playback_finished()
 {
+    qInfo("[TRACE][on_playback_finished] >>> ENTER");
     qInfo("[on_playback_finished] video reached EOF, auto-stopping");
     // ★ 调现有的 stop_play，里面包了 try/catch，保证异常不传播
     stop_play();
+    qInfo("[TRACE][on_playback_finished] <<< EXIT (normal)");
 }
 
 /**
@@ -3174,9 +3461,14 @@ void MainWindow::start_send_data(bool bSend)
 void MainWindow::update_menus()
 {
     qDebug() << "update_menus: " << is_playing();
+    qInfo("[TRACE][update_menus] is_playing() DONE");
     enable_menus(is_playing());
+    qInfo("[TRACE][update_menus] enable_menus() DONE");
     enable_v_menus(playing_has_video());
+    qInfo("[TRACE][update_menus] enable_v_menus() DONE");
     enable_a_menus(playing_has_audio());
+    qInfo("[TRACE][update_menus] enable_a_menus() DONE");
+    qInfo("[TRACE][update_menus] <<< EXIT");
 }
 
 /**
@@ -3302,7 +3594,12 @@ bool MainWindow::get_avisual_format(BarHelper::VisualFormat& fmt) const
  */
 bool MainWindow::start_youtube_url_thread(const YoutubeUrlDlg::YoutubeUrlData& data)
 {
-    m_pYoutubeUrlThread.reset();
+    // ★ 先安全退休上一轮解析线程：解析可能长达 5~30s，用户重新发起解析时
+    //    它多半还在跑。（不能 wait 等它 —— 会卡住 GUI 好几秒；
+    //    也不能 reset() —— 析构正在运行的 QThread 直接 abort）
+    //    退休后它的结果作废：切断信号后 resultReady 不会再触发播放。
+    retire_worker_thread(m_pYoutubeUrlThread.release());
+
     m_pYoutubeUrlThread = std::make_unique<YoutubeUrlThread>(data, this);
     connect(m_pYoutubeUrlThread.get(), &YoutubeUrlThread::resultReady, this, &MainWindow::start_to_play);
     connect(m_pYoutubeUrlThread.get(), &YoutubeUrlThread::resultYtReady, this, &MainWindow::start_yt_play);

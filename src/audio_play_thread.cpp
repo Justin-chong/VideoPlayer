@@ -9,6 +9,8 @@
 
 #include "audio_play_thread.h"
 
+#include <QDebug>   // qInfo/qDebug（埋点用）
+
 // 调试开关
 #if !NDEBUG
 #define DEBUG_PLAYFILTER 0
@@ -38,9 +40,33 @@ AudioPlayThread::~AudioPlayThread()
     //         会导致 QAudioSink 内部状态不一致 → abort()
     //   修法：先 stop_thread()（设 m_bExitThread=true + wait），确保 run() 已退出
     //         再 stop_device() 才能安全
+    qInfo("[TRACE][~AudioPlayThread] >>> ENTER, this=%p, isRunning=%d", (void*)this, (int)isRunning());
+
+    qInfo("[TRACE][~AudioPlayThread] -- stop_thread() BEGIN");
     stop_thread();            // 先让音频线程自己退出
+    qInfo("[TRACE][~AudioPlayThread] -- stop_thread() DONE");
+
+    qInfo("[TRACE][~AudioPlayThread] -- stop_device() BEGIN");
     stop_device();            // 再停止音频设备
+    qInfo("[TRACE][~AudioPlayThread] -- stop_device() DONE");
+
+    // ★ 显式销毁 QAudioSink，而不是留给编译器隐式析构成员
+    //   原因有两个：
+    //   1) m_pOutput 是"第一个声明"的成员，按逆序它是"最后一个被隐式析构"的，
+    //      中间没有任何日志 —— 之前 abort 就藏在这个看不见的位置；
+    //      显式写出来 + 前后打日志，就能把崩点暴露成"最后一条日志"。
+    //   2) QAudioSink 内部带 QTimer、有线程亲和性（QTBUG-108187），
+    //      必须在"创建它的那个线程"里销毁。现在它已在 GUI 线程创建
+    //      （见 MainWindow::play_started），这里也在 GUI 线程销毁，两边一致。
+    qInfo("[TRACE][~AudioPlayThread] -- m_pOutput.reset() destroy QAudioSink BEGIN");
+    m_pOutput.reset();
+    qInfo("[TRACE][~AudioPlayThread] -- m_pOutput.reset() destroy QAudioSink DONE");
+
+    qInfo("[TRACE][~AudioPlayThread] -- final_resample_param() BEGIN");
     final_resample_param();   // 最后释放重采样资源
+    qInfo("[TRACE][~AudioPlayThread] -- final_resample_param() DONE");
+
+    qInfo("[TRACE][~AudioPlayThread] <<< EXIT");
 }
 
 /**
@@ -144,15 +170,36 @@ void AudioPlayThread::set_device_volume(float volume)
 
 void AudioPlayThread::stop_device()
 {
+    qInfo("[TRACE][AudioPlayThread::stop_device] >>> ENTER, m_bDeviceStopped=%d, m_pOutput=%p",
+          (int)m_bDeviceStopped.load(), (void*)m_pOutput.get());
     // ★ 防止二次调用：析构函数 + *_stopped 槽 + 任何其他路径都可能走到这里
     //   QAudioSink::stop() 二次调用会触发 Qt 内部 abort
     if (m_bDeviceStopped.exchange(true))
+    {
+        qInfo("[TRACE][AudioPlayThread::stop_device] <<< EXIT (already stopped, skip)");
         return;
+    }
     if (m_pOutput)
     {
+        // ★★ 2026-09-24 修复：这里只 stop()，不再调 reset() ★★
+        //   QAudioSink::start() 返回的那个 QIODevice 内部是一个 ring buffer：
+        //   本线程 write() 往里填，Qt 的音频渲染线程往里取（消费）。
+        //   stop()  = 停止输出、脱离系统资源，是"有序停止"；
+        //   reset() = "immediately halts ... and discards any audio data currently
+        //              in the buffers"，即立刻清空缓冲区。
+        //   在 stop() 之后紧接着 reset() 清空缓冲区，会与渲染线程正在进行的
+        //   那次消费撞车：它已经按旧的长度去取数据，而缓冲区刚被清空 →
+        //   QRingBuffer::free() 里 Q_ASSERT(bytes <= bufferSize) 失败（Debug 版弹
+        //   "Debug Error!"），快速连续切换文件（A→B→C）时很容易命中。
+        //   缓冲区里的残留数据不需要我们手动丢：紧接着 QAudioSink 就会被销毁。
+        qInfo("[TRACE][AudioPlayThread::stop_device] -- m_pOutput->stop()");
         m_pOutput->stop();
-        m_pOutput->reset();
+        qInfo("[TRACE][AudioPlayThread::stop_device] -- stop DONE");
     }
+    // ★ stop() 之后 start() 返回的那个 QIODevice 已经失效，
+    //   置空避免后面（或再次）误用悬空指针
+    m_audioDevice = nullptr;
+    qInfo("[TRACE][AudioPlayThread::stop_device] <<< EXIT");
 }
 // 播放本地文件（调试用）
 void AudioPlayThread::play_file(const QString& file)
@@ -177,6 +224,11 @@ void AudioPlayThread::play_buf(const uint8_t* buf, int datasize)
     //   用 while 循环分批写，直到写完为止，避免漏音
     while (datasize > 0)
     {
+        // ★ 每一轮都重新确认设备还在：GUI 线程的 stop_device() 会把 m_audioDevice
+        //   置空，不能在循环里用上一次取到的值一路写下去（悬空指针）
+        if (!m_audioDevice)
+            return;
+
         qint64 len = m_audioDevice->write((const char*)data, datasize);
         if (len < 0)
             break;  // 写入失败（设备异常），跳出避免死循环
@@ -276,9 +328,11 @@ int AudioPlayThread::audio_decode_frame(VideoState* is)
                 // return -1;
             }
 
+            if(m_bExitThread)return -1;
             if (is->abort_request)
                 break;
         }
+        //！！!注意，这里是死锁循环等待主要原因，因为这也是个阻塞点
         //等一个可读槽位（播放线程从这里取）
         if (!(af = frame_queue_peek_readable(&is->sampq)))
             return -1;
@@ -457,11 +511,19 @@ bool AudioPlayThread::init_resample_param(AVCodecContext* pAudio, AVSampleFormat
 
 void AudioPlayThread::final_resample_param()
 {
+    qInfo("[TRACE][AudioPlayThread::final_resample_param] >>> ENTER, swrCtx=%p",
+          (void*)m_audioResample.swrCtx);
     swr_free(&m_audioResample.swrCtx);
+    qInfo("[TRACE][AudioPlayThread::final_resample_param] <<< EXIT");
 }
 
 void AudioPlayThread::stop_thread()
 {
+    qInfo("[TRACE][AudioPlayThread::stop_thread] >>> ENTER, this=%p, isRunning=%d, isFinished=%d",
+          (void*)this, (int)isRunning(), (int)isFinished());
     m_bExitThread = true;
     wait();
+    qInfo("[TRACE][AudioPlayThread::stop_thread] wait() returned, isRunning=%d, isFinished=%d",
+          (int)isRunning(), (int)isFinished());
+    qInfo("[TRACE][AudioPlayThread::stop_thread] <<< EXIT");
 }

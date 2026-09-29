@@ -78,6 +78,7 @@ public:
 
 public:
     // ===== 对外接口（外部代码可调用）=====
+    //里面实际是调用内部实现函数
     void start_to_play(const QString& file);  // 播放一个文件（启动整个流水线）
     void stop_play();                          // 停止播放
     void pause_play();                         // 暂停/恢复
@@ -138,6 +139,7 @@ private:
 
 private slots:
     // ===== 菜单项的响应槽 =====
+    //不需要connect，直接在ui页面右击控件“转为槽”，就会生成on_xxx_triggered()模板
     void on_actionOpen_triggered();                 // 菜单：打开文件
     void on_actionQuit_triggered();                 // 菜单：退出
     void on_actionHelp_triggered();                 // 菜单：帮助

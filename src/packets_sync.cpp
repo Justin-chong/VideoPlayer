@@ -374,6 +374,7 @@ Frame* frame_queue_peek_writable(FrameQueue* f)
 {
     /* wait until we have space to put a new frame */
     f->mutex->lock();
+    //队列满了但不是退出时，阻塞等待消费者消费
     while (f->size >= f->max_size && !f->pktq->abort_request)
     {
         f->cond->wait(f->mutex);//满了就睡
@@ -393,9 +394,10 @@ Frame* frame_queue_peek_readable(FrameQueue* f)
 {
     /* wait until we have a readable a new frame */
     f->mutex->lock();
+    //队列中没有可读位置
     while (f->size - f->rindex_shown <= 0 && !f->pktq->abort_request)
     {
-        f->cond->wait(f->mutex);
+        f->cond->wait(f->mutex);//点击stop停止产生循环等待死锁原因
     }
     f->mutex->unlock();
 
@@ -597,7 +599,7 @@ int get_video_frame(VideoState* is, AVFrame* frame)
 /**
  * @brief 初始化 Decoder
  *        - 分配 AVPacket
- *        - 绑定 avctx 和 packet queue
+ *        - 绑定 解码器上下文 和 packet queue
  *        - empty_queue_cond 是"packet 队列空了"的通知（用来给读线程发信号）
  */
 int decoder_init(Decoder* d, AVCodecContext* avctx, PacketQueue* queue, QWaitCondition* empty_queue_cond)
@@ -619,7 +621,7 @@ int decoder_init(Decoder* d, AVCodecContext* avctx, PacketQueue* queue, QWaitCon
  */
 int decoder_start(Decoder* d, void* thread, const char* thread_name)
 {
-    packet_queue_start(d->queue);
+    packet_queue_start(d->queue);//启动队列
     d->decoder_tid = thread;
     d->decoder_name = av_strdup(thread_name);
     return 0;
@@ -639,11 +641,15 @@ void decoder_destroy(Decoder* d)
  * @brief 终止解码线程：abort queue + 唤醒 + 等待线程退出 + flush
  *        注意这里用 QThread::wait() 替代了原 ffplay 的 SDL_WaitThread
  */
+//`decoder_abort` 要同时掐断解码线程**所有可能的阻塞点**（PacketQueue 的 get + FrameQueue 的 peek_writable/peek_readable）
 void decoder_abort(Decoder* d, FrameQueue* fq)
 {
-    packet_queue_abort(d->queue);
-    frame_queue_signal(fq);
+    //两个阻塞点，唤醒阻塞在 （等包）/（等帧队列槽位）的解码线程
+    packet_queue_abort(d->queue);//停止队列，唤醒所有消费者（解码线程）
+    frame_queue_signal(fq);//唤醒所有等待 FrameQueue 的线程
     // SDL_WaitThread(d->decoder_tid, nullptr);
+
+    //等待上面结束
     ((QThread*)(d->decoder_tid))->wait();
     d->decoder_tid = nullptr;
     packet_queue_flush(d->queue);
@@ -859,6 +865,7 @@ void get_duration_time(const int64_t duration_us, int64_t& hours, int64_t& mins,
  *        暂停时直接返回 pts；播放时用 pts_drift + (now - last_updated) 推算
  *        还要判断 serial 是否还匹配，不匹配返回 NaN
  */
+//暂停时返回上一次记录点，不暂停返回上一次记录点与流逝的时间之和。
 double get_clock(Clock* c)
 {
     // ★ serial 校验：Clock 跟 PacketQueue 强绑定
@@ -878,7 +885,7 @@ double get_clock(Clock* c)
         //   time - (time - last_updated) * (1.0 - speed) 是"考虑倍速"的修正
         //   speed=1.0 时这一项退化为 time，所以 speed=1.0 时就是最朴素的 drift+elapsed
         //   speed=2.0 时时间走得比 wall time 快一倍
-        double time = av_gettime_relative() / 1000000.0;
+        double time = av_gettime_relative() / 1000000.0;//**从系统某个参考点开始，到现在一共走过了多少秒**。
         return c->pts_drift + time - (time - c->last_updated) * (1.0 - c->speed);
     }
 }
@@ -891,7 +898,7 @@ void set_clock_at(Clock* c, double pts, int serial, double time)
 {
     c->pts = pts;
     c->last_updated = time;
-    c->pts_drift = c->pts - time;
+    c->pts_drift = c->pts - time;//记录时刻的 pts 减去记录时刻的墙钟
     c->serial = serial;
 }
 
@@ -910,6 +917,7 @@ void set_clock(Clock* c, double pts, int serial)
  */
 void set_clock_speed(Clock* c, double speed)
 {
+    //设置倍速之前先获取当前时钟时间，固定当前位置
     set_clock(c, get_clock(c), c->serial);
     c->speed = speed;
 }
@@ -1158,6 +1166,7 @@ void toggle_pause(VideoState* is, bool pause)
     // ★ 4 个时钟的 paused 标志 + 统一开关 is->paused 一起更新
     //   任何一路流"暂停"都要 4 个 clock 一起停
     //   （暂停/恢复本质是"时间流不流"，所有流共享这个开关）
+    //刷新暂停/播放标记
     is->paused = is->audclk.paused = is->vidclk.paused = is->extclk.paused =
         pause; // !is->paused;
     is->step = 0;
@@ -1214,31 +1223,35 @@ void step_to_next_frame(VideoState* is)
  *       - delay 超过 AV_SYNC_FRAMEDUP_THRESHOLD：直接延迟 delay+diff（重复一帧）
  *       - 否则 delay 翻倍（让视频等一会）
  *   否则 diff 在合理范围，delay 不变
+ *   delay相当于这一帧应该显示多久
+ *  **delay 输入** = "这帧天然该显示多久"（帧率的倒数）
+    **delay 返回值** = "考虑到音视频差，这帧实际该显示多久"
  */
 double compute_target_delay(double delay, VideoState* is)
 {
     double sync_threshold, diff = 0;
 
-    /* update delay to follow master synchronisation source */
+    // ★ 只有在"视频是从时钟"时才需要校正（视频主时钟时视频就是基准，无需校正）
     if (get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)
     {
-        /* if video is slave, we try to correct big delays by
-       duplicating or deleting a frame */
-        diff = get_clock(&is->vidclk) - get_master_clock(is);
+        // ★ diff = 视频时钟 - 主时钟（正=视频超前，负=视频落后）  偏差
+        diff = get_clock(&is->vidclk) - get_master_clock(is);//主时钟是音频
 
-        /* skip or repeat frame. We take into account the
-       delay to compute the threshold. I still don't know
-       if it is the best guess */
+        // ★ 同步阈值：取 [0.04, 0.1] 之间，且不高于 delay
         sync_threshold =
             FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
+        //修正方向
         if (!isnan(diff) && fabs(diff) < is->max_frame_duration)
         {
-            if (diff <= -sync_threshold)
-                delay = FFMAX(0, delay + diff);
+            if (diff <= -sync_threshold)// ① 视频落后太多
+                delay = FFMAX(0, delay + diff);//    缩短 delay → 视频追上去
             else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
-                delay = delay + diff;
-            else if (diff >= sync_threshold)
-                delay = 2 * delay;
+                delay = delay + diff;// ② 视频超前太多，且帧长>0.1s
+                                      //    直接延迟 delay+diff，
+            //视频超前时恰恰要 `delay + diff`（增大 delay）让视频慢下来，而不是缩短
+
+            else if (diff >= sync_threshold)// ③ 视频超前太多，正常帧长
+                delay = 2 * delay;//    delay 翻倍 → 等音频
         }
     }
 
@@ -1252,13 +1265,14 @@ double compute_target_delay(double delay, VideoState* is)
  *        - 异常值回退用 vp->duration（来自 packet 的 duration 字段）
  *        - 跨 serial 视为 0
  */
+//返回的就是 delay 的 "初始值"
 double vp_duration(VideoState* is, Frame* vp, Frame* nextvp)
 {
-    if (vp->serial == nextvp->serial)
+    if (vp->serial == nextvp->serial)// 同一播放段才可比
     {
-        double duration = nextvp->pts - vp->pts;
+        double duration = nextvp->pts - vp->pts;// 优先用 PTS 差
         if (isnan(duration) || duration <= 0 || duration > is->max_frame_duration)
-            return vp->duration;
+            return vp->duration;// 异常值回退用帧自带 duration
         else
             return duration;
     }

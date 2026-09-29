@@ -1,6 +1,9 @@
 #pragma once
 
+#include <QPointer>
 #include <QThread>
+
+class MainWindow;
 
 /**
  * @brief "开始播放" 预处理线程
@@ -28,4 +31,11 @@ signals:
 
 protected:
     void run() override;  // Qt 线程入口
+
+private:
+    // ★ 构造时保存主窗口指针，不再依赖 QObject::parent()。
+    //   原因：线程"退休"时会把它从 MainWindow 的父子树上摘下来
+    //   （见 mainwindow.cpp 的 retire_worker_thread），那时 parent() 已经是 null。
+    //   用 QPointer 还多一层保护：主窗口先销毁时它自动变 null。
+    QPointer<MainWindow> m_pMainWnd;
 };
